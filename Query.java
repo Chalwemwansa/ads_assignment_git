@@ -78,8 +78,22 @@ public class Query {
    */
   public void clearTables() {
     try {
-      // TODO: YOUR CODE HERE
+        conn.setAutoCommit(false);
+        // Clear custom tables, excluding flights
+        conn.createStatement().executeUpdate("DELETE FROM Reservations");
+        conn.createStatement().executeUpdate("DELETE FROM Users");
+
+        // Reset auto-increment values for the Reservations and Users tables
+        conn.createStatement().executeUpdate("ALTER TABLE Reservations AUTO_INCREMENT = 1");
+        conn.commit();
+        conn.setAutoCommit(true);
     } catch (Exception e) {
+      try {
+        conn.rollback();
+        conn.setAutoCommit(true);
+      } catch (Exception er) {
+
+      }
       e.printStackTrace();
     }
   }
@@ -127,7 +141,7 @@ public class Query {
         }
         if (Arrays.equals(hash, storedPassword)) {
           this.user = username;
-          return String.format("welcome %s\n", username);
+          return String.format("Logged in as %s\n", username);
         }
       }
       return String.format("Failed to log in user %s\n", username);
@@ -169,6 +183,7 @@ public class Query {
 
     // writing the prepared statement
     try {
+      conn.setAutoCommit(false);
       PreparedStatement stmt = conn.prepareStatement("INSERT INTO users VALUES (?, ?, ?, ?)");
       stmt.setString(1, username);
       stmt.setBytes(2, hash);
@@ -176,8 +191,17 @@ public class Query {
       stmt.setInt(4, initAmount);
       // execute the stmt
       stmt.executeUpdate();
-      return "User created successfully\n";
-    } catch (SQLException e) { return "Failed to create user\n"; }
+      conn.commit();
+      conn.setAutoCommit(true);
+      return "Created user " + username + "\n";
+    } catch (SQLException e) {
+      try {
+        conn.rollback();
+        conn.setAutoCommit(true);
+      } catch (Exception er) {
+
+      }
+      return "Failed to create user\n"; }
     
   }
 
@@ -217,47 +241,30 @@ public class Query {
   public String transaction_search(String originCity, String destinationCity, boolean directFlight, int dayOfMonth,
       int numberOfItineraries) {
     try {
-      PreparedStatement stmt = conn.prepareStatement("SELECT flight_num as number, fid AS flight_1_id, origin_city, dest_city as final_destination, price AS cost, actual_time AS flight_time, day_of_month AS day,"
+      PreparedStatement stmt = conn.prepareStatement("SELECT flight_num as number, capacity, fid AS flight_1_id, origin_city, dest_city as final_destination, price AS cost, actual_time AS flight_time, day_of_month AS day,"
         + "'direct' AS flight_type, carrier_id AS f1_carrier_id FROM Flights WHERE origin_city = ? AND dest_city = ? AND canceled = 0 AND day_of_month = ? ORDER BY flight_time ASC, fid ASC LIMIT ?");
       stmt.setString(1, originCity);
       stmt.setString(2, destinationCity);
       stmt.setInt(3, dayOfMonth);
       stmt.setInt(4, numberOfItineraries);
       ResultSet result = stmt.executeQuery();
+      String retn = "";
       int ids = 0;
       this.flights.clear();
       while (result.next()) {
         Map<String, Object> flight = new HashMap<>();
-        /**
-         * 
-        PreparedStatement car = conn.prepareStatement("SELECT name as carrier_name FROM carriers WHERE cid = ?");
-        car.setString(1, result.getString("f1_carrier_id"));
-        ResultSet carier = car.executeQuery();
-        if (carier.next()) {
-          flight.put("carrier", carier.getString("carrier_name"));
-        }
-         */
-        PreparedStatement carrierCapacity = conn.prepareStatement(CHECK_FLIGHT_CAPACITY);
-        carrierCapacity.setInt(1, result.getInt("flight_1_id"));
-        ResultSet capacity = carrierCapacity.executeQuery();
-        if (capacity.next()) {
-          flight.put("capacity", capacity.getInt("capacity"));
-        }
-        flight.put("carrier", result.getString("f1_carrier_id"));
+        
+        flight.put("f1_capacity", result.getInt("capacity"));
         flight.put("itinerary_id", ids);
-        flight.put("number", result.getInt("number"));
         flight.put("flight_1_id", result.getInt("flight_1_id"));
-        flight.put("origin_city", result.getString("origin_city"));
-        flight.put("final_destination", result.getString("final_destination"));
         flight.put("cost", result.getInt("cost"));
         flight.put("flight_time", result.getInt("flight_time"));
-        flight.put("day", result.getInt("day"));
         flight.put("flight_type", result.getString("flight_type"));
         this.flights.add(flight);  // Add the flight map to the array (List)
         String out = String.format("Itinerary %d: 1 flight(s), %d minutes\nID: %d Day: %d Carrier: %s Number: %d Origin: %s Dest: %s Duration: %d Capacity: %d Price: %d",
-          ids, flight.get("flight_time"), flight.get("flight_1_id"), flight.get("day"), flight.get("carrier"), flight.get("number"), flight.get("origin_city"), flight.get("final_destination"),
-          flight.get("flight_time"), flight.get("capacity"), flight.get("cost"));
-        System.out.println(out);
+          ids, flight.get("flight_time"), flight.get("flight_1_id"), result.getInt("day"), result.getString("f1_carrier_id"), result.getInt("number"), result.getString("origin_city"), result.getString("final_destination"),
+          flight.get("flight_time"), flight.get("f1_capacity"), flight.get("cost"));
+        retn += out + "\n";
         ids += 1;
       }
       if ((!directFlight) && (this.flights.size() < numberOfItineraries)) {
@@ -270,6 +277,8 @@ public class Query {
           + "f2.origin_city as middle_city,"
           + "f2.dest_city as final_destination,"
           + "f1.price as 1_cost,"
+          + "f1.capacity as f1_capacity,"
+          + "f2.capacity as f2_capacity,"
           + "f2.price as 2_cost,"
           + "f1.actual_time as 1_flight_time,"
           + "f2.actual_time as 2_flight_time,"
@@ -297,51 +306,30 @@ public class Query {
         ResultSet results_2 = stmt_2.executeQuery();
         while(results_2.next()) {
           Map<String, Object> flight = new HashMap<>(); // new map to put the results
-          PreparedStatement carrierCapacity_1 = conn.prepareStatement(CHECK_FLIGHT_CAPACITY);
-          carrierCapacity_1.setInt(1, results_2.getInt("flight_1_id"));
-          ResultSet capacity_1 = carrierCapacity_1.executeQuery();
-          if (capacity_1.next()) {
-            flight.put("capacity", capacity_1.getInt("capacity"));
-          }
-          PreparedStatement carrierCapacity = conn.prepareStatement(CHECK_FLIGHT_CAPACITY);
-          carrierCapacity.setInt(1, results_2.getInt("flight_2_id"));
-          ResultSet capacity = carrierCapacity.executeQuery();
-          if (capacity.next()) {
-            flight.put("2_capacity", capacity.getInt("capacity"));
-          }
-          flight.put("carrier", results_2.getString("f1_carrier_id"));
-          flight.put("2_carrier", results_2.getString("f2_carrier_id"));
+          
+          flight.put("f1_capacity", results_2.getInt("f1_capacity"));
+          flight.put("f2_capacity", results_2.getInt("f2_capacity"));
           flight.put("itinerary_id", ids);
-          flight.put("number", results_2.getInt("1_number"));
-          flight.put("2_number", results_2.getInt("2_number"));
           flight.put("flight_1_id", results_2.getInt("flight_1_id"));
           flight.put("flight_2_id", results_2.getInt("flight_2_id"));
-          flight.put("origin_city", results_2.getString("origin_city"));
-          flight.put("middle_city", results_2.getString("middle_city"));
-          flight.put("final_destination", results_2.getString("final_destination"));
-          flight.put("1_cost", results_2.getInt("1_cost"));
           flight.put("cost", results_2.getInt("1_cost") + results_2.getInt("2_cost"));
-          flight.put("2_cost", results_2.getInt("2_cost"));
-          flight.put("1_flight_time", results_2.getInt("1_flight_time"));
-          flight.put("2_flight_time", results_2.getInt("2_flight_time"));
           flight.put("flight_time", results_2.getInt("flight_time"));
-          flight.put("day", results_2.getInt("day"));
           flight.put("flight_type", results_2.getString("flight_type"));
           this.flights.add(flight);  // Add the flight map to the array (List)
 
           String out1 = String.format("ID: %d Day: %d Carrier: %s Number: %d Origin: %s Dest: %s Duration: %d Capacity: %d Price: %d",
-            flight.get("flight_1_id"), flight.get("day"), flight.get("carrier"), flight.get("number"), flight.get("origin_city"), flight.get("middle_city"),
-            flight.get("1_flight_time"), flight.get("capacity"), flight.get("1_cost"));
+            flight.get("flight_1_id"), results_2.getInt("day"), results_2.getString("f1_carrier_id"), results_2.getInt("1_number"), results_2.getString("origin_city"), results_2.getString("middle_city"),
+            results_2.getInt("1_flight_time"), results_2.getInt("f1_capacity"), results_2.getInt("1_cost"));
           
           String out2 = String.format("ID: %d Day: %d Carrier: %s Number: %d Origin: %s Dest: %s Duration: %d Capacity: %d Price: %d",
-            flight.get("flight_2_id"), flight.get("day"), flight.get("2_carrier"), flight.get("2_number"), flight.get("middle_city"), flight.get("final_destination"),
-            flight.get("2_flight_time"), flight.get("2_capacity"), flight.get("2_cost"));
+            flight.get("flight_2_id"), results_2.getInt("day"), results_2.getString("f2_carrier_id"), results_2.getInt("2_number"), results_2.getString("middle_city"), results_2.getString("final_destination"),
+            results_2.getInt("2_flight_time"), results_2.getInt("f2_capacity"), results_2.getInt("2_cost"));
           String out = String.format("Itinerary %d: 2 flight(s), %d minutes\n%s\n%s", ids, flight.get("flight_time"), out1, out2);
-          System.out.println(out);
+          retn += out + "\n";
           ids += 1;
         }
       }
-      return "";
+      return retn;
     } catch (SQLException e) {
       return "no itineraries\n"; }
   }
@@ -368,30 +356,97 @@ public class Query {
     if (this.user == null) {
       return "Login first to book\n";
     }
-    try {
+    PreparedStatement stmt = null;
+    ResultSet rs = null;
+    int retries = 5;
+
+    while (retries >= 0) {
+      try {
+      String quer;
       if (this.flights.isEmpty()) {
         return "Invalid Itinerary number use search command to see valid itinerary numbers\n";
       }
       Map<String, Object> itinerary = this.flights.get(itineraryId);
-      String quer;
-      quer = (itinerary.get("flight_2_id") != null) ? 
-      "INSERT INTO reservations (username, flight_type, paid, cost, flight_1_id, flight_2_id) VALUES (?, ?, ?, ?, ?, ?)" : 
-      "INSERT INTO reservations (username, flight_type, paid, cost, flight_1_id) VALUES (?, ?, ?, ?, ?)";
-      PreparedStatement stmt = conn.prepareStatement(quer);
+
+      conn.setAutoCommit(false);
+      // Combine both flight checks into a single query
+      String sql = "SELECT " +
+             "(SELECT COUNT(flight_1_id) FROM reservations WHERE flight_1_id = ? FOR UPDATE) as flight1_booked, " +
+             "(SELECT COUNT(flight_2_id) FROM reservations WHERE flight_2_id = ? FOR UPDATE) as flight2_booked";
+
+      stmt = conn.prepareStatement(sql);
+      stmt.setInt(1, (int) itinerary.get("flight_1_id"));
+      stmt.setInt(2, itinerary.get("flight_2_id") != null ? (int) itinerary.get("flight_2_id") : 0);
+
+      rs = stmt.executeQuery();
+
+      if (rs.next()) {
+        int flight1Booked = rs.getInt("flight1_booked");
+        int flight2Booked = rs.getInt("flight2_booked");
+
+        // Check capacity for flight 1
+        if ((int) itinerary.get("f1_capacity") - flight1Booked <= 0) {
+          conn.rollback();
+          return "Booking failed\n";
+        }
+
+        // Check capacity for flight 2 (if applicable)
+        if (itinerary.get("flight_2_id") != null && (int) itinerary.get("f2_capacity") - flight2Booked <= 0) {
+          conn.rollback();
+          return "Booking failed\n";
+        }
+      }
+
+      if (itinerary.get("flight_2_id") != null) { // 2 flights
+        quer = "INSERT INTO reservations (username, flight_type, paid, duration, cost, flight_1_id, flight_2_id) VALUES (?, ?, ?, ?, ?, ?, ?)";
+      } else {
+        quer = "INSERT INTO reservations (username, flight_type, paid, duration, cost, flight_1_id) VALUES (?, ?, ?, ?, ?, ?)";
+      }
+      
+      stmt = conn.prepareStatement(quer, Statement.RETURN_GENERATED_KEYS);
       stmt.setString(1, this.user);
       stmt.setString(2, (String) itinerary.get("flight_type"));
       stmt.setBoolean(3, false);
-      stmt.setInt(4, (int) itinerary.get("cost"));
-      stmt.setInt(5, (int) itinerary.get("flight_1_id"));
+      stmt.setInt(4, (int) itinerary.get("flight_time"));
+      stmt.setInt(5, (int) itinerary.get("cost"));
+      stmt.setInt(6, (int) itinerary.get("flight_1_id"));
       if (itinerary.get("flight_2_id") != null) {       
-        stmt.setInt(6, (int) itinerary.get("flight_2_id"));
+        stmt.setInt(7, (int) itinerary.get("flight_2_id"));
       }
       stmt.executeUpdate();
-      return "Booking Successful\n";
+      conn.commit();
+      conn.setAutoCommit(true);
+      long reservationId = 0;
+      rs = stmt.getGeneratedKeys();
+      if (rs.next()) {
+        reservationId = rs.getLong(1);
+      }
+      return "Booked flight(s), reservation ID: " + reservationId +"\n";
     }
     catch (SQLException e) {
-      return "Booking failed\n";
+        if (e.getSQLState().equals("40001")) {  // Deadlock detected
+          try {
+            conn.rollback();
+            retries--;
+          } catch (SQLException er) {
+            return "Booking failed\n";
+          }
+        } else {
+          return "Booking failed\n";
+        }
+        
+    } finally {
+        try {
+            if (rs != null) rs.close();  // Close ResultSet
+            if (stmt != null) stmt.close();  // Close PreparedStatement
+            conn.setAutoCommit(true);  // Restore auto-commit mode
+        } catch (SQLException closeEx) {
+          return "Booking failed\n";
+            // Handle exceptions during closing resources, if necessary
+        }
     }
+    }
+    return "Booking failed\n";
   }
 
   /**
@@ -424,7 +479,7 @@ public class Query {
           return "Reservation " + reservationId + "has already been paid for\n";
         }
         if (!this.user.equals(rst.getString("username"))) {
-          return "Unauthorized\n";
+          return "Cannot find unpaid reservation " + reservationId + " under user: " + this.user +"\n";
         }
         PreparedStatement smtU = conn.prepareStatement("SELECT balance FROM users WHERE username = ?");
         smtU.setString(1, this.user);
@@ -433,6 +488,7 @@ public class Query {
           if (balance.getInt("balance") < rst.getInt("cost")) {
             return "Insufficient Credit in user account\n";
           } else {
+            conn.setAutoCommit(false);
             PreparedStatement deduct = conn.prepareStatement("UPDATE users SET balance = ? WHERE username = ?");
             deduct.setInt(1, balance.getInt("balance") - rst.getInt("cost"));
             deduct.setString(2, this.user);
@@ -441,13 +497,19 @@ public class Query {
             paid.setBoolean(1, true);
             paid.setInt(2, reservationId);
             paid.executeUpdate();
-            return "Payment for reservation " + reservationId + " was successfull\n";
+            conn.commit();
+            conn.setAutoCommit(true);
+            return "Payment for reservation " + reservationId + " was successful\n";
           }
         }
-      }else {return "Invalid Reservation ID";}
-      return "Payment for reservation " + reservationId + "successful\n";
+      }else {return "Cannot find unpaid reservation " + reservationId + " under user: " + this.user +"\n";}
+      return "Payment for reservation " + reservationId + " successful\n";
     } catch (SQLException e) {
-      return"Failed to pay for reservation " + reservationId + "\n";
+      try {
+        conn.rollback();
+        conn.setAutoCommit(true);
+      } catch (Exception er) {}
+      return "Failed to pay for reservation " + reservationId + "\n";
     }
   }
 
@@ -463,7 +525,6 @@ public class Query {
       stmt.setInt(1, flight_id);
       ResultSet result = stmt.executeQuery();
       if (result.next()) {
-        this.duration = result.getInt("duration");
         String info = String.format("ID: %s Day: %d Carrier: %s Number: %d Origin: %s Dest: %s Duration: %d Capacity: %d Price: %d",
            flight_id, result.getInt("day"), result.getString("carrier"), result.getInt("number"), 
            result.getString("origin"), result.getString("dest"), result.getInt("duration"), 
@@ -472,7 +533,6 @@ public class Query {
       }
       return "";
     } catch (SQLException e) {
-      System.err.println(e);
       return "failed";
     }
   }
@@ -502,33 +562,33 @@ public class Query {
       if (this.user == null) {
         return "User not logged in\n";
       }
-      String quer = "SELECT rid, flight_type, cost, paid, flight_1_id, flight_2_id FROM reservations WHERE username = ? ORDER BY rid ASC";
+      String quer = "SELECT rid, flight_type, duration, cost, paid, flight_1_id, flight_2_id FROM reservations WHERE username = ? ORDER BY rid ASC";
       PreparedStatement stmt = conn.prepareStatement(quer);
       stmt.setString(1, this.user);
       ResultSet reservations = stmt.executeQuery();
+      boolean flag = true;
+      String retn = "";
       while (reservations.next()) {
-        String flight_2 = null;
-        int flight_2_duration = 0;
-        if (reservations.getString("flight_type").equals("indirect")) {
-          flight_2 = this.getFlightDetails(reservations.getInt("flight_2_id"));
-          flight_2_duration = this.duration;
-        }
+        flag = false;
+        String flight_2 = this.getFlightDetails(reservations.getInt("flight_2_id"));
         String flight_1 = this.getFlightDetails(reservations.getInt("flight_1_id"));
         String rtn = (reservations.getString("flight_type").equals("direct")) ?
-          String.format("Reservation %d: 1 flight(s), %d minutes, Cost: %d, Paid: %b\n%s\n",
-            reservations.getInt("rid"), this.duration, reservations.getInt("cost"), reservations.getBoolean("paid"),
+          String.format("Reservation %d paid: %b:\n%s\n",
+            reservations.getInt("rid"), reservations.getBoolean("paid"),
             this.getFlightDetails(reservations.getInt("flight_1_id"))) :
-          String.format("Reservation %d: 2 flight(s),  %d minutes, Cost: %d, Paid: %b\n%s\n",
-            reservations.getInt("rid"), (this.duration + flight_2_duration), reservations.getInt("cost"), reservations.getBoolean("paid"),
+          String.format("Reservation %d paid: %b:\n%s\n",
+            reservations.getInt("rid"), reservations.getBoolean("paid"),
             flight_1);
         if (reservations.getString("flight_type").equals("indirect")) {
           rtn += flight_2;
         }
-        System.out.println(rtn);
+        retn += rtn;
       }
-      return "";
+      if (flag) {
+        return "no reservations found for " + this.user + "\n";
+      }
+      return retn;
     } catch (SQLException e) {
-      System.err.println(e);
       return "Failed to retrieve reservations\n";
     }
   }
@@ -549,30 +609,45 @@ public class Query {
    */
   public String transaction_cancel(int reservationId) {
     try {
+      int amount = 0;
       if (this.user == null) {
         return "Unauthorized, user has to be logged in\n";
       }
-      PreparedStatement stmt = conn.prepareStatement("SELECT username, cost, paid FROM reservations WHERE rid = ?");
+      PreparedStatement stmt = conn.prepareStatement("SELECT username, cost, paid, flight_1_id, flight_2_id FROM reservations WHERE rid = ?");
       stmt.setInt(1, reservationId);
       ResultSet results = stmt.executeQuery();
       if (results.next()) {
         if (!this.user.equals(results.getString("username"))) {
-          return "Unauthorized user for reservation " + reservationId + "\n";
+          return "Failed to cancel reservation " + reservationId + " \n";
         }
         if (results.getBoolean("paid")) {
+          amount = results.getInt("cost");
+          conn.setAutoCommit(false);
           PreparedStatement refund = conn.prepareStatement("UPDATE users SET balance = balance + ? WHERE username = ?");
           refund.setInt(1, results.getInt("cost"));
           refund.setString(2, results.getString("username"));
           refund.executeUpdate();
+          conn.commit();
+          conn.setAutoCommit(true);
         }
+        conn.setAutoCommit(false);
         PreparedStatement cancel = conn.prepareStatement("DELETE FROM reservations WHERE rid = ?");
         cancel.setInt(1, reservationId);
         cancel.executeUpdate();
+        conn.commit();
+        conn.setAutoCommit(true);
       } else {
-        return "Reservation ID " + reservationId + " is invalid\n";
+        return "Failed to cancel reservation " + reservationId + " \n";
       }
-      return "Reservation " + reservationId + " was successfully cancelled\n";
+      if (amount != 0) {
+        return "Canceled reservation " + reservationId + "\n";
+      }
+      return "Canceled reservation " + reservationId + "\n";
     } catch (SQLException e) {
+      try {
+        conn.rollback();
+        conn.setAutoCommit(true);
+      } catch (Exception er) {}
       return "Failed to cancel reservation " + reservationId + "\n";
     }
   }
